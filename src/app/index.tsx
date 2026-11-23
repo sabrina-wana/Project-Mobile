@@ -1,44 +1,35 @@
-/**
- * Civic Pulse & Community Disaster Management (SDG 11)
- * Lead System Architect: Sabrina (Anggota 1)
- *
- * Main Screen: Dashboard Laporan Warga
- *
- * Menguji dan mendemonstrasikan:
- * 1. Unidirectional Data Flow dari useReports()
- * 2. Single Source of Truth dari Zustand Store
- * 3. Filter berdasarkan kategori ('road_damage', 'flood', 'landslide', 'public_facility')
- * 4. Penambahan laporan baru secara realtime & immutable
- * 5. Visualisasi kesiapan koordinat spasial (LBS Engine Dilla)
- */
-
-import React, { useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
+  KeyboardAvoidingView,
+  ListRenderItem,
   Modal,
-  SafeAreaView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
-import { ReportCard } from '../components/ReportCard';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  FilterBar,
+  MapPlaceholder,
+  ReportCard,
+  StatsOverview,
+} from '../components';
 import { useReports } from '../hooks/useReports';
-import { ReportCategory } from '../types/report';
-
-const CATEGORY_FILTERS: { key: ReportCategory | 'all'; label: string }[] = [
-  { key: 'all', label: 'Semua' },
-  { key: 'road_damage', label: '🚧 Jalan' },
-  { key: 'flood', label: '🌊 Banjir' },
-  { key: 'landslide', label: '⚠️ Longsor' },
-  { key: 'public_facility', label: '💡 Fasilitas' },
-];
-
-export default function CivicPulseScreen() {
+import { Report, ReportCategory, ReportStatus, ReportUrgency } from '../types/report';
+export default function CivicPulseDashboard() {
+  const { width } = useWindowDimensions();
+  const isTablet = width >= 768;
+  // Mengambil state & action dari Custom Hook (Clean Architecture Sabrina)
   const {
+    reports,
     filteredReports,
     selectedReport,
     filter,
@@ -49,438 +40,603 @@ export default function CivicPulseScreen() {
     updateStatus,
     selectReport,
     setCategoryFilter,
+    setStatusFilter,
     setSearchQuery,
+    resetFilters,
     refresh,
   } = useReports(true);
-
-  // Local state untuk modal form tambah laporan
+  // Local state untuk Modal Tambah Laporan Warga
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newCategory, setNewCategory] = useState<ReportCategory>('road_damage');
+  const [newUrgency, setNewUrgency] = useState<ReportUrgency>('high');
   const [newAddress, setNewAddress] = useState('');
   const [newLat, setNewLat] = useState('-7.9600');
   const [newLng, setNewLng] = useState('112.6300');
+  const [reporterName, setReporterName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const handleCreateReport = async () => {
+  // Status apakah filter saat ini sedang aktif
+  const isFilterActive = useMemo(() => {
+    return Boolean(
+      (filter.category && filter.category !== 'all') ||
+      (filter.status && filter.status !== 'all') ||
+      (filter.searchQuery && filter.searchQuery.trim().length > 0)
+    );
+  }, [filter]);
+  // Menghitung jumlah laporan per kategori secara ter-memoize
+  const categoryCounts = useMemo(() => {
+    const counts: Record<ReportCategory | 'all', number> = {
+      all: reports.length,
+      road_damage: 0,
+      flood: 0,
+      landslide: 0,
+      public_facility: 0,
+    };
+    reports.forEach((item) => {
+      if (counts[item.category] !== undefined) {
+        counts[item.category] += 1;
+      }
+    });
+    return counts;
+  }, [reports]);
+  // Handler: Mengubah status laporan (UDF)
+  const handleStatusChange = useCallback(
+    async (id: string, nextStatus: ReportStatus) => {
+      try {
+        await updateStatus(id, nextStatus);
+      } catch (err: any) {
+        Alert.alert('Gagal Memperbarui Status', err?.message || 'Terjadi kesalahan sistem.');
+      }
+    },
+    [updateStatus]
+  );
+  // Handler: Memilih laporan untuk sinkronisasi peta
+  const handleSelectReport = useCallback(
+    (id: string) => {
+      if (selectedReport?.id === id) {
+        selectReport(null); // Toggle off jika ditekan lagi
+      } else {
+        selectReport(id);
+      }
+    },
+    [selectedReport?.id, selectReport]
+  );
+  // Handler: Reset fokus peta
+  const handleClearSelection = useCallback(() => {
+    selectReport(null);
+  }, [selectReport]);
+  // Handler: Pengiriman Laporan Baru
+  const handleCreateReport = useCallback(async () => {
     if (!newTitle.trim()) {
-      alert('Judul laporan wajib diisi!');
+      Alert.alert('Perhatian', 'Judul laporan warga wajib diisi.');
       return;
     }
-
     const lat = parseFloat(newLat);
     const lng = parseFloat(newLng);
     if (isNaN(lat) || isNaN(lng)) {
-      alert('Format koordinat tidak valid!');
+      Alert.alert('Format Salah', 'Koordinat Latitude dan Longitude harus berupa angka yang valid.');
       return;
     }
-
     setIsSubmitting(true);
     try {
       await addReport({
-        title: newTitle,
-        description: newDesc,
+        title: newTitle.trim(),
+        description: newDesc.trim(),
         category: newCategory,
+        urgency: newUrgency,
         location: {
           latitude: lat,
           longitude: lng,
           address: newAddress.trim() || 'Lokasi Laporan Warga',
         },
-        urgency: 'high',
         reporter: {
-          name: 'Warga Peduli (Sabrina)',
-          isAnonymous: false,
+          name: reporterName.trim() || 'Warga Peduli',
+          isAnonymous: !reporterName.trim(),
         },
       });
-
-      // Reset form
+      // Reset form input
       setNewTitle('');
       setNewDesc('');
       setNewAddress('');
+      setReporterName('');
       setIsModalOpen(false);
+      Alert.alert('Berhasil', 'Laporan warga berhasil dicatat dan dipublikasikan!');
     } catch (err: any) {
-      alert(err.message || 'Gagal mengirim laporan');
+      Alert.alert('Gagal Menyimpan', err?.message || 'Gagal mengirimkan laporan warga.');
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      {/* 1. Header Banner & SDG 11 Context */}
-      <View style={styles.banner}>
-        <View>
-          <Text style={styles.bannerBadge}>SDG 11: SUSTAINABLE CITIES</Text>
-          <Text style={styles.bannerTitle}>Civic Pulse & Disaster Hub</Text>
-          <Text style={styles.bannerSubtitle}>
-            Sistem Pelaporan Warga Berbasis LBS & Realtime State
-          </Text>
-        </View>
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => setIsModalOpen(true)}
-        >
-          <Text style={styles.addButtonText}>+ Lapor</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* 2. Stats Bar: Single Source of Truth dari Zustand Store */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statBox}>
-          <Text style={styles.statNumber}>{stats.total}</Text>
-          <Text style={styles.statLabel}>Total</Text>
-        </View>
-        <View style={styles.statBox}>
-          <Text style={[styles.statNumber, { color: '#CA8A04' }]}>
-            {stats.pending}
-          </Text>
-          <Text style={styles.statLabel}>Menunggu</Text>
-        </View>
-        <View style={styles.statBox}>
-          <Text style={[styles.statNumber, { color: '#0284C7' }]}>
-            {stats.inProgress}
-          </Text>
-          <Text style={styles.statLabel}>Diproses</Text>
-        </View>
-        <View style={styles.statBox}>
-          <Text style={[styles.statNumber, { color: '#16A34A' }]}>
-            {stats.resolved}
-          </Text>
-          <Text style={styles.statLabel}>Selesai</Text>
-        </View>
-      </View>
-
-      {/* 3. Search & Category Filters (UDF) */}
-      <View style={styles.filterSection}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Cari laporan berdasarkan judul, lokasi..."
-          value={filter.searchQuery || ''}
-          onChangeText={setSearchQuery}
+  }, [newTitle, newDesc, newCategory, newUrgency, newLat, newLng, newAddress, reporterName, addReport]);
+  // Key extractor ter-memoize untuk FlatList
+  const keyExtractor = useCallback((item: Report) => item.id, []);
+  // Item renderer ter-memoize untuk ReportCard
+  const renderItem: ListRenderItem<Report> = useCallback(
+    ({ item }) => (
+      <View style={styles.cardItemWrapper}>
+        <ReportCard
+          report={item}
+          isSelected={selectedReport?.id === item.id}
+          onPress={() => handleSelectReport(item.id)}
+          onStatusChange={handleStatusChange}
         />
-
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.chipScrollView}
-          contentContainerStyle={styles.chipContainer}
-        >
-          {CATEGORY_FILTERS.map((item) => {
-            const isActive = (filter.category || 'all') === item.key;
-            return (
-              <TouchableOpacity
-                key={item.key}
-                onPress={() => setCategoryFilter(item.key)}
-                style={[styles.chip, isActive && styles.chipActive]}
-              >
-                <Text
-                  style={[styles.chipText, isActive && styles.chipTextActive]}
-                >
-                  {item.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
       </View>
-
-      {/* 4. Notification Active Report / Map Sync Hint */}
-      {selectedReport && (
-        <View style={styles.selectedBanner}>
-          <Text style={styles.selectedBannerText} numberOfLines={1}>
-            📌 Laporan Terpilih: {selectedReport.title} (
-            {selectedReport.location.latitude.toFixed(4)},{' '}
-            {selectedReport.location.longitude.toFixed(4)})
-          </Text>
-          <TouchableOpacity onPress={() => selectReport(null)}>
-            <Text style={styles.selectedBannerClose}>✕</Text>
+    ),
+    [selectedReport?.id, handleSelectReport, handleStatusChange]
+  );
+  // Header gabungan FlatList (Banner, Stats, Map, Filter, List Title)
+  const renderListHeader = useMemo(() => {
+    return (
+      <View>
+        {/* 1. Header Banner & SDG 11 Context */}
+        <View style={styles.heroBanner}>
+          <View style={styles.bannerInfo}>
+            <View style={styles.badgeSdgRow}>
+              <View style={styles.sdgTag}>
+                <Text style={styles.sdgTagText}>SDG 11</Text>
+              </View>
+              <Text style={styles.sdgSubText}>SUSTAINABLE CITIES & COMMUNITIES</Text>
+            </View>
+            <Text style={styles.heroTitle}>Civic Pulse Hub</Text>
+            <Text style={styles.heroSubtitle}>
+              Platform Pelaporan Warga Berbasis LBS & Real-time State
+            </Text>
+          </View>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => setIsModalOpen(true)}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="Buat Laporan Baru"
+            style={styles.heroAddButton}
+          >
+            <Text style={styles.heroAddButtonIcon}>＋</Text>
+            <Text style={styles.heroAddButtonText}>Lapor</Text>
           </TouchableOpacity>
         </View>
-      )}
-
-      {/* 5. Daftar Laporan Warga */}
-      {isLoading && filteredReports.length === 0 ? (
+        {/* 2. Ringkasan Status Laporan (Interactive Filter) */}
+        <StatsOverview
+          stats={stats}
+          activeStatus={filter.status || 'all'}
+          onSelectStatus={setStatusFilter}
+        />
+        {/* 3. Placeholder Area Peta GIS (Siap Diintegrasikan Dilla) */}
+        <MapPlaceholder
+          totalPoints={filteredReports.length}
+          selectedReport={selectedReport}
+          onClearSelection={handleClearSelection}
+        />
+        {/* 4. Bilah Pencarian & Chip Filter Kategori */}
+        <FilterBar
+          searchQuery={filter.searchQuery || ''}
+          onSearchChange={setSearchQuery}
+          activeCategory={filter.category || 'all'}
+          onSelectCategory={setCategoryFilter}
+          categoryCounts={categoryCounts}
+          activeStatus={filter.status || 'all'}
+          onSelectStatus={setStatusFilter}
+          onResetFilters={resetFilters}
+          isFilterActive={isFilterActive}
+        />
+        {/* 5. Header Seksi Daftar Laporan */}
+        <View style={styles.sectionHeaderRow}>
+          <View style={styles.sectionTitleWrapper}>
+            <Text style={styles.sectionHeading}>Daftar Laporan Warga</Text>
+            <View style={styles.countPill}>
+              <Text style={styles.countPillText}>{filteredReports.length}</Text>
+            </View>
+          </View>
+          {isFilterActive && (
+            <View style={styles.filterActiveBadge}>
+              <Text style={styles.filterActiveBadgeText}>Filter Diterapkan</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  }, [
+    stats,
+    filter.status,
+    filter.category,
+    filter.searchQuery,
+    filteredReports.length,
+    selectedReport,
+    categoryCounts,
+    isFilterActive,
+    setStatusFilter,
+    setCategoryFilter,
+    setSearchQuery,
+    resetFilters,
+    handleClearSelection,
+  ]);
+  return (
+    <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.safeArea}>
+      {/* State: Loading Data Awal */}
+      {isLoading && reports.length === 0 ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#0284C7" />
-          <Text style={styles.loadingText}>Memuat laporan warga...</Text>
+          <Text style={styles.loadingTitle}>Memuat Civic Pulse...</Text>
+          <Text style={styles.loadingSubtitle}>
+            Menghubungkan ke Service Layer dan Single Source of Truth
+          </Text>
         </View>
       ) : error ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.errorText}>⚠️ {error}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={refresh}>
-            <Text style={styles.retryButtonText}>Coba Lagi</Text>
+          <Text style={styles.errorIcon}>⚠️</Text>
+          <Text style={styles.errorTitle}>Terjadi Kesalahan</Text>
+          <Text style={styles.errorDescription}>{error}</Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={refresh}
+            accessible={true}
+            accessibilityRole="button"
+            accessibilityLabel="Muat ulang laporan"
+          >
+            <Text style={styles.retryButtonText}>Muat Ulang Data</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <FlatList
           data={filteredReports}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => (
-            <ReportCard
-              report={item}
-              isSelected={selectedReport?.id === item.id}
-              onPress={() => selectReport(item.id)}
-              onStatusChange={(id, nextStatus) => updateStatus(id, nextStatus)}
-            />
-          )}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          ListHeaderComponent={renderListHeader}
+          contentContainerStyle={[
+            styles.listContent,
+            isTablet && styles.listContentTablet,
+          ]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          refreshing={isLoading}
+          onRefresh={refresh}
+          // Optimasi performa FlatList (Naila - Performance Specialist)
+          initialNumToRender={6}
+          maxToRenderPerBatch={10}
+          windowSize={7}
+          removeClippedSubviews={Platform.OS === 'android'}
           ListEmptyComponent={
-            <View style={styles.centerContainer}>
-              <Text style={styles.emptyText}>
-                Tidak ada laporan yang sesuai dengan filter.
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyIcon}>🔍</Text>
+              <Text style={styles.emptyTitle}>Laporan Tidak Ditemukan</Text>
+              <Text style={styles.emptySubtitle}>
+                Tidak ada laporan yang sesuai dengan kriteria filter atau pencarian Anda.
               </Text>
+              {isFilterActive && (
+                <TouchableOpacity
+                  style={styles.emptyResetButton}
+                  onPress={resetFilters}
+                  accessible={true}
+                  accessibilityRole="button"
+                  accessibilityLabel="Reset seluruh filter"
+                >
+                  <Text style={styles.emptyResetText}>Reset Seluruh Filter</Text>
+                </TouchableOpacity>
+              )}
             </View>
           }
         />
       )}
-
-      {/* 6. Modal Form Lapor Cepat (Simulasi Masukan Warga) */}
+      {/* Modal Form: Buat Laporan Warga Baru (Responsive & Safe Area) */}
       <Modal
         visible={isModalOpen}
         animationType="slide"
         transparent={true}
         onRequestClose={() => setIsModalOpen(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Buat Laporan Warga Baru</Text>
-            <Text style={styles.modalSubtitle}>
-              Mendukung SDG 11: Kota & Komunitas Berkelanjutan
-            </Text>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Judul insiden (contoh: Jalan Amblas)"
-              value={newTitle}
-              onChangeText={setNewTitle}
-            />
-
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              placeholder="Deskripsi detail situasi/kerusakan"
-              multiline
-              numberOfLines={3}
-              value={newDesc}
-              onChangeText={setNewDesc}
-            />
-
-            <Text style={styles.inputLabel}>Kategori:</Text>
-            <View style={styles.categoryPickerRow}>
-              {(['road_damage', 'flood', 'landslide', 'public_facility'] as ReportCategory[]).map(
-                (cat) => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[
-                      styles.pickerChip,
-                      newCategory === cat && styles.pickerChipActive,
-                    ]}
-                    onPress={() => setNewCategory(cat)}
-                  >
-                    <Text
-                      style={[
-                        styles.pickerChipText,
-                        newCategory === cat && styles.pickerChipTextActive,
-                      ]}
-                    >
-                      {cat === 'road_damage'
-                        ? 'Jalan'
-                        : cat === 'flood'
-                        ? 'Banjir'
-                        : cat === 'landslide'
-                        ? 'Longsor'
-                        : 'Fasilitas'}
-                    </Text>
-                  </TouchableOpacity>
-                )
-              )}
-            </View>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Alamat / Patokan lokasi"
-              value={newAddress}
-              onChangeText={setNewAddress}
-            />
-
-            <View style={styles.coordRow}>
-              <TextInput
-                style={[styles.input, styles.coordInput]}
-                placeholder="Latitude"
-                value={newLat}
-                onChangeText={setNewLat}
-                keyboardType="numeric"
-              />
-              <TextInput
-                style={[styles.input, styles.coordInput]}
-                placeholder="Longitude"
-                value={newLng}
-                onChangeText={setNewLng}
-                keyboardType="numeric"
-              />
-            </View>
-
-            <View style={styles.modalActions}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={[styles.modalCard, isTablet && styles.modalCardTablet]}>
+            {/* Modal Header */}
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalHeading}>Buat Laporan Warga</Text>
+                <Text style={styles.modalSubheading}>
+                  Kontribusi untuk Ketangguhan Kota (SDG 11)
+                </Text>
+              </View>
               <TouchableOpacity
-                style={styles.cancelButton}
+                onPress={() => setIsModalOpen(false)}
+                accessible={true}
+                accessibilityRole="button"
+                accessibilityLabel="Tutup formulir"
+                style={styles.modalCloseButton}
+              >
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {/* Modal Body Scroll */}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.modalScrollContent}
+            >
+              {/* 1. Judul Laporan */}
+              <Text style={styles.formLabel}>Judul Laporan *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Contoh: Tanggul Jebol di Kawasan Blimbing"
+                placeholderTextColor="#94A3B8"
+                value={newTitle}
+                onChangeText={setNewTitle}
+              />
+              {/* 2. Deskripsi Detail */}
+              <Text style={styles.formLabel}>Deskripsi Situasi / Kerusakan</Text>
+              <TextInput
+                style={[styles.formInput, styles.formTextArea]}
+                placeholder="Jelaskan kondisi di lapangan secara spesifik..."
+                placeholderTextColor="#94A3B8"
+                multiline
+                numberOfLines={3}
+                value={newDesc}
+                onChangeText={setNewDesc}
+              />
+              {/* 3. Pilihan Kategori */}
+              <Text style={styles.formLabel}>Kategori Bencana / Fasilitas *</Text>
+              <View style={styles.formCategoryRow}>
+                {(
+                  [
+                    { key: 'road_damage', label: '🚧 Jalan' },
+                    { key: 'flood', label: '🌊 Banjir' },
+                    { key: 'landslide', label: '⚠️ Longsor' },
+                    { key: 'public_facility', label: '💡 Fasilitas' },
+                  ] as { key: ReportCategory; label: string }[]
+                ).map((cat) => {
+                  const isSelected = newCategory === cat.key;
+                  return (
+                    <TouchableOpacity
+                      key={cat.key}
+                      style={[
+                        styles.formCategoryChip,
+                        isSelected && styles.formCategoryChipActive,
+                      ]}
+                      onPress={() => setNewCategory(cat.key)}
+                    >
+                      <Text
+                        style={[
+                          styles.formCategoryChipText,
+                          isSelected && styles.formCategoryChipTextActive,
+                        ]}
+                      >
+                        {cat.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {/* 4. Tingkat Urgensi */}
+              <Text style={styles.formLabel}>Tingkat Urgensi *</Text>
+              <View style={styles.formUrgencyRow}>
+                {(
+                  [
+                    { key: 'low', label: 'Rendah', color: '#64748B' },
+                    { key: 'medium', label: 'Sedang', color: '#CA8A04' },
+                    { key: 'high', label: 'Tinggi', color: '#EA580C' },
+                    { key: 'critical', label: 'Kritis', color: '#DC2626' },
+                  ] as { key: ReportUrgency; label: string; color: string }[]
+                ).map((urg) => {
+                  const isSelected = newUrgency === urg.key;
+                  return (
+                    <TouchableOpacity
+                      key={urg.key}
+                      style={[
+                        styles.formUrgencyChip,
+                        isSelected && {
+                          backgroundColor: urg.color,
+                          borderColor: urg.color,
+                        },
+                      ]}
+                      onPress={() => setNewUrgency(urg.key)}
+                    >
+                      <Text
+                        style={[
+                          styles.formUrgencyText,
+                          isSelected && styles.formUrgencyTextActive,
+                        ]}
+                      >
+                        {urg.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {/* 5. Alamat / Patokan Lokasi */}
+              <Text style={styles.formLabel}>Alamat / Patokan Lapangan</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Contoh: Jl. Soekarno Hatta No. 45"
+                placeholderTextColor="#94A3B8"
+                value={newAddress}
+                onChangeText={setNewAddress}
+              />
+              {/* 6. Koordinat Spasial (Latitude, Longitude) */}
+              <Text style={styles.formLabel}>Koordinat Spasial LBS (Lat, Lng) *</Text>
+              <View style={styles.formCoordRow}>
+                <View style={styles.formCoordCol}>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="Latitude"
+                    placeholderTextColor="#94A3B8"
+                    value={newLat}
+                    onChangeText={setNewLat}
+                    keyboardType="numeric"
+                  />
+                </View>
+                <View style={styles.formCoordCol}>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="Longitude"
+                    placeholderTextColor="#94A3B8"
+                    value={newLng}
+                    onChangeText={setNewLng}
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
+              {/* 7. Nama Pelapor (Opsional) */}
+              <Text style={styles.formLabel}>Nama Pelapor (Kosongkan jika Anonim)</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Nama Anda atau Komunitas"
+                placeholderTextColor="#94A3B8"
+                value={reporterName}
+                onChangeText={setReporterName}
+              />
+            </ScrollView>
+            {/* Modal Actions */}
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.modalCancelButton}
                 onPress={() => setIsModalOpen(false)}
                 disabled={isSubmitting}
               >
-                <Text style={styles.cancelButtonText}>Batal</Text>
+                <Text style={styles.modalCancelText}>Batal</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.submitButton}
+                style={styles.modalSubmitButton}
                 onPress={handleCreateReport}
                 disabled={isSubmitting}
               >
-                <Text style={styles.submitButtonText}>
-                  {isSubmitting ? 'Menyimpan...' : 'Kirim Laporan'}
+                <Text style={styles.modalSubmitText}>
+                  {isSubmitting ? 'Mengirim...' : 'Kirim Laporan'}
                 </Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
 }
-
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#F8FAFC',
   },
-  banner: {
+  heroBanner: {
     backgroundColor: '#0284C7',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingTop: 16,
+    paddingBottom: 16,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  bannerBadge: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#BAE6FD',
+  bannerInfo: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  badgeSdgRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  sdgTag: {
+    backgroundColor: '#FD9D24', // Warna resmi SDG
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  sdgTagText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  sdgSubText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#E0F2FE',
     letterSpacing: 0.5,
   },
-  bannerTitle: {
-    fontSize: 18,
+  heroTitle: {
+    fontSize: 20,
     fontWeight: '800',
     color: '#FFFFFF',
-    marginTop: 2,
+    letterSpacing: 0.3,
   },
-  bannerSubtitle: {
+  heroSubtitle: {
     fontSize: 11,
-    color: '#E0F2FE',
+    color: '#BAE6FD',
     marginTop: 2,
+    lineHeight: 15,
   },
-  addButton: {
+  heroAddButton: {
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  addButtonText: {
-    color: '#0284C7',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  statsContainer: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  statBox: {
-    flex: 1,
     alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  statNumber: {
-    fontSize: 18,
+  heroAddButtonIcon: {
+    fontSize: 16,
     fontWeight: '800',
-    color: '#111827',
+    color: '#0284C7',
+    marginRight: 4,
   },
-  statLabel: {
-    fontSize: 11,
-    color: '#6B7280',
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  filterSection: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  searchInput: {
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  heroAddButtonText: {
     fontSize: 13,
-    marginBottom: 8,
+    fontWeight: '800',
+    color: '#0284C7',
   },
-  chipScrollView: {
-    flexDirection: 'row',
-  },
-  chipContainer: {
-    gap: 6,
-  },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  chipActive: {
-    backgroundColor: '#0284C7',
-    borderColor: '#0284C7',
-  },
-  chipText: {
-    fontSize: 12,
-    color: '#4B5563',
-    fontWeight: '600',
-  },
-  chipTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  selectedBanner: {
+  sectionHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#BFDBFE',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 8,
   },
-  selectedBannerText: {
-    fontSize: 11,
-    color: '#1D4ED8',
-    fontWeight: '600',
-    flex: 1,
+  sectionTitleWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  selectedBannerClose: {
-    fontSize: 14,
-    color: '#1D4ED8',
+  sectionHeading: {
+    fontSize: 15,
     fontWeight: '800',
+    color: '#0F172A',
+  },
+  countPill: {
+    backgroundColor: '#E2E8F0',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
     marginLeft: 8,
   },
+  countPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  filterActiveBadge: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  filterActiveBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
   listContent: {
-    padding: 12,
+    paddingBottom: 24,
+  },
+  listContentTablet: {
+    maxWidth: 800,
+    alignSelf: 'center',
+    width: '100%',
+  },
+  cardItemWrapper: {
+    paddingHorizontal: 16,
   },
   centerContainer: {
     flex: 1,
@@ -488,138 +644,246 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
   },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 13,
-    color: '#6B7280',
+  loadingTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginTop: 12,
   },
-  emptyText: {
-    fontSize: 13,
-    color: '#9CA3AF',
+  loadingSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 4,
     textAlign: 'center',
   },
-  errorText: {
-    fontSize: 13,
+  errorIcon: {
+    fontSize: 32,
+    marginBottom: 8,
+  },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: '800',
     color: '#DC2626',
-    marginBottom: 10,
+  },
+  errorDescription: {
+    fontSize: 13,
+    color: '#475569',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 16,
   },
   retryButton: {
     backgroundColor: '#0284C7',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 8,
   },
   retryButtonText: {
     color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 36,
+    paddingHorizontal: 20,
+  },
+  emptyIcon: {
+    fontSize: 32,
+    marginBottom: 8,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  emptySubtitle: {
     fontSize: 12,
-    fontWeight: '600',
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 14,
+    maxWidth: 280,
+  },
+  emptyResetButton: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  emptyResetText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0284C7',
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
     justifyContent: 'center',
+    alignItems: 'center',
     padding: 16,
   },
-  modalContent: {
+  modalCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 20,
+    width: '100%',
+    maxHeight: '85%',
+    overflow: 'hidden',
     shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
   },
-  modalTitle: {
-    fontSize: 18,
+  modalCardTablet: {
+    maxWidth: 540,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  modalHeading: {
+    fontSize: 17,
     fontWeight: '800',
-    color: '#111827',
+    color: '#0F172A',
   },
-  modalSubtitle: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginBottom: 14,
+  modalSubheading: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
   },
-  input: {
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 13,
-    marginBottom: 10,
+  modalCloseButton: {
+    padding: 4,
   },
-  textArea: {
-    height: 60,
-    textAlignVertical: 'top',
+  modalCloseText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#94A3B8',
   },
-  inputLabel: {
+  modalScrollContent: {
+    padding: 18,
+  },
+  formLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#374151',
-    marginBottom: 6,
+    color: '#334155',
+    marginBottom: 5,
+    marginTop: 8,
   },
-  categoryPickerRow: {
+  formInput: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 13,
+    color: '#0F172A',
+  },
+  formTextArea: {
+    height: 65,
+    textAlignVertical: 'top',
+  },
+  formCategoryRow: {
     flexDirection: 'row',
     gap: 6,
-    marginBottom: 12,
+    marginBottom: 4,
   },
-  pickerChip: {
+  formCategoryChip: {
     flex: 1,
-    paddingVertical: 6,
-    borderRadius: 6,
+    paddingVertical: 7,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#F9FAFB',
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
     alignItems: 'center',
   },
-  pickerChipActive: {
+  formCategoryChipActive: {
     backgroundColor: '#0284C7',
     borderColor: '#0284C7',
   },
-  pickerChipText: {
+  formCategoryChipText: {
     fontSize: 11,
-    color: '#4B5563',
     fontWeight: '600',
+    color: '#475569',
   },
-  pickerChipTextActive: {
+  formCategoryChipTextActive: {
     color: '#FFFFFF',
     fontWeight: '700',
   },
-  coordRow: {
+  formUrgencyRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 4,
+  },
+  formUrgencyChip: {
+    flex: 1,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+  },
+  formUrgencyText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  formUrgencyTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  formCoordRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 10,
   },
-  coordInput: {
+  formCoordCol: {
     flex: 1,
-    marginBottom: 0,
   },
-  modalActions: {
+  modalFooter: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 10,
-    marginTop: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    backgroundColor: '#FAFAFC',
   },
-  cancelButton: {
+  modalCancelButton: {
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 9,
     borderRadius: 8,
   },
-  cancelButtonText: {
+  modalCancelText: {
     fontSize: 13,
-    color: '#6B7280',
     fontWeight: '600',
+    color: '#64748B',
   },
-  submitButton: {
+  modalSubmitButton: {
     backgroundColor: '#0284C7',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
     borderRadius: 8,
+    shadowColor: '#0284C7',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  submitButtonText: {
+  modalSubmitText: {
     fontSize: 13,
-    color: '#FFFFFF',
     fontWeight: '700',
+    color: '#FFFFFF',
   },
 });

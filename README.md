@@ -117,16 +117,29 @@ Civic_Pulse/
 
 ---
 
-## 🤝 Panduan Integrasi Antar-Anggota
+## 🤝 Status Implementasi & Panduan Antar-Anggota
 
-### Untuk Anggota 2: Naila (Lead Frontend & Performance Specialist)
-1. **Gunakan Custom Hook**: Cukup import `useReports` dari `@/hooks/useReports`. Tidak perlu memanggil Zustand store secara langsung.
-2. **Atomic Selectors**: Hook sudah menggunakan atomic selectors untuk meminimalkan re-render.
-3. **Kustomisasi Komponen**: Komponen `ReportCard.tsx`, `CategoryBadge.tsx`, dan `StatusBadge.tsx` di `src/components/` dapat dipercantik styling dan animasinya tanpa perlu mengubah struktur state.
+### ✅ Anggota 1: Sabrina (Lead System Architect & Security Engineer)
+- Fondasi Clean Layered Architecture (Domain Types, Mock Services, Zustand Store, useReports Hook).
+- Single Source of Truth & Unidirectional Data Flow (UDF).
+- Script verifikasi arsitektur: `npm run verify:arch` (18/18 tests passed).
 
-### Untuk Anggota 3: Dilla (Lead Hardware & Spatial/Network Engineer)
+### ✅ Anggota 2: Naila (Lead Frontend & Performance Specialist) - STATUS SELESAI
+- **Modern Responsive Dashboard (`src/app/index.tsx`)**: Menggunakan Flexbox, `SafeAreaView` insets, dan tipografi bertema SDG 11 Sustainable Cities.
+- **Ringkasan Status Interaktif (`src/components/StatsOverview.tsx`)**: Visualisasi counter status (Total, Menunggu, Diproses, Selesai) dengan kemampuan filter cepat via ketukan kartu.
+- **Area Peta Spasial Placeholder (`src/components/MapPlaceholder.tsx`)**: Simulasi kanvas radar GIS dengan grid koordinat Malang Raya (-7.9600, 112.6300), pin indikator, dan callout fokus laporan aktif.
+- **Bilah Pencarian & Chip Filter Kategori (`src/components/FilterBar.tsx`)**: Input pencarian real-time + counter dinamis per kategori laporan terhubung langsung ke `useReports()`.
+- **Komponen Kartu Laporan Teroptimasi (`src/components/ReportCard.tsx`)**: Dilengkapi `UrgencyBadge`, metadata pelapor, upvotes, koordinat geografis presisi, dan tombol transisi status.
+- **Optimasi Performa**:
+  - `React.memo` pada seluruh komponen presentasional murni.
+  - `useMemo` & `useCallback` pada FlatList dan event handlers.
+  - FlatList windowing: `initialNumToRender={6}`, `maxToRenderPerBatch={10}`, `windowSize={7}`, `removeClippedSubviews`.
+- Script verifikasi frontend: `npm run verify:frontend` (24/24 tests passed).
+
+### ⏳ Anggota 3: Dilla (Lead Hardware & Spatial/Network Engineer) - SIAP DIINTEGRASIKAN
 1. **Model Koordinat**: Gunakan `LocationCoordinate` dan `MapRegion` dari `@/types/location`.
 2. **Sinkronisasi Marker Peta**:
+   - Ganti isi visual kanvas pada `src/components/MapPlaceholder.tsx` (atau buat `MapView` wrapper) menggunakan `react-native-maps`.
    - Panggil `selectReport(id)` dari `useReports` saat user mengetuk marker pada `react-native-maps`.
    - Gunakan `selectedReport` untuk menampilkan bottom sheet atau callout detail laporan.
 3. **Filter Spasial**: Ketika formula Haversine diimplementasikan pada Milestone 2, Dilla cukup memanggil `reports` dari store dan memfilternya berdasarkan jarak dari posisi GPS user.

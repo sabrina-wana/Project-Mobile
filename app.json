@@ -4,12 +4,8 @@
     "slug": "civic-pulse",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "scheme": "civicpulse",
     "userInterfaceStyle": "automatic",
-    "splash": {
-      "backgroundColor": "#0284C7"
-    },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0284C7"
@@ -17,7 +13,8 @@
       "package": "com.civicpulse.app"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-asset"
     ],
     "extra": {
       "theme": "SDG 11 - Sustainable Cities and Communities"
